@@ -6,6 +6,7 @@ from tools.authority_lookup import lookup_authority
 from tools.resume_session import resume_session, save_partial_session
 from tools.whatsapp_notification import send_whatsapp
 import uvicorn
+import json
 
 app = FastAPI(title="Road Complaint Backend")
 
@@ -16,47 +17,121 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
-# ─── VAPI Tool Webhooks ───────────────────────────────
+# ─── Helper Function ───────────────────────────────────────
+def extract_vapi_args(body: dict):
+    try:
+        # Format 1: message.toolCalls
+        tool_calls = body.get("message", {}).get("toolCalls", [])
+        if not tool_calls:
+            # Format 2: direct toolCalls
+            tool_calls = body.get("toolCalls", [])
+        
+        if tool_calls:
+            tool_call_id = tool_calls[0].get("id", "")
+            args = tool_calls[0].get("function", {}).get("arguments", {})
+            
+            # Agar args string hai toh parse karo
+            if isinstance(args, str):
+                args = json.loads(args)
+            
+            return tool_call_id, args
+        
+        return "", {}
+    except Exception as e:
+        print("Extract error:", e)
+        return "", {}
+
+# ─── VAPI Tool Webhooks ───────────────────────────────────
 
 @app.post("/api/tools/save-to-firebase")
 async def save_to_firebase(request: Request):
     body = await request.json()
-    data = body.get("message", {}).get("toolCalls", [{}])[0].get("function", {}).get("arguments", {})
-    result = save_complaint(data)
-    return {"results": [{"toolCallId": body.get("message", {}).get("toolCalls", [{}])[0].get("id", ""), "result": str(result)}]}
+    print("SAVE FIREBASE REQUEST:", json.dumps(body, indent=2))
+    
+    tool_call_id, args = extract_vapi_args(body)
+    print("PARSED ARGS:", args)
+    
+    result = save_complaint(args)
+    print("SAVE RESULT:", result)
+    
+    return {
+        "results": [{
+            "toolCallId": tool_call_id,
+            "result": json.dumps(result)
+        }]
+    }
 
 @app.post("/api/tools/road-type-detection")
 async def road_type_detection(request: Request):
     body = await request.json()
-    args = body.get("message", {}).get("toolCalls", [{}])[0].get("function", {}).get("arguments", {})
+    print("ROAD TYPE REQUEST:", json.dumps(body, indent=2))
+    
+    tool_call_id, args = extract_vapi_args(body)
     location = args.get("location", "")
+    
     result = detect_road_type(location)
-    return {"results": [{"toolCallId": body.get("message", {}).get("toolCalls", [{}])[0].get("id", ""), "result": str(result)}]}
+    print("ROAD TYPE RESULT:", result)
+    
+    return {
+        "results": [{
+            "toolCallId": tool_call_id,
+            "result": json.dumps(result)
+        }]
+    }
 
 @app.post("/api/tools/authority-lookup")
 async def authority_lookup(request: Request):
     body = await request.json()
-    args = body.get("message", {}).get("toolCalls", [{}])[0].get("function", {}).get("arguments", {})
-    result = lookup_authority(args.get("road_type", ""), args.get("location", ""))
-    return {"results": [{"toolCallId": body.get("message", {}).get("toolCalls", [{}])[0].get("id", ""), "result": str(result)}]}
+    print("AUTHORITY REQUEST:", json.dumps(body, indent=2))
+    
+    tool_call_id, args = extract_vapi_args(body)
+    result = lookup_authority(
+        args.get("road_type", ""),
+        args.get("location", "")
+    )
+    print("AUTHORITY RESULT:", result)
+    
+    return {
+        "results": [{
+            "toolCallId": tool_call_id,
+            "result": json.dumps(result)
+        }]
+    }
 
 @app.post("/api/tools/resume-session")
 async def resume_session_handler(request: Request):
     body = await request.json()
-    args = body.get("message", {}).get("toolCalls", [{}])[0].get("function", {}).get("arguments", {})
+    print("RESUME SESSION REQUEST:", json.dumps(body, indent=2))
+    
+    tool_call_id, args = extract_vapi_args(body)
     result = resume_session(args.get("phone_number", ""))
-    return {"results": [{"toolCallId": body.get("message", {}).get("toolCalls", [{}])[0].get("id", ""), "result": str(result)}]}
+    
+    return {
+        "results": [{
+            "toolCallId": tool_call_id,
+            "result": json.dumps(result)
+        }]
+    }
 
 @app.post("/api/tools/whatsapp-notification")
 async def whatsapp_notification(request: Request):
     body = await request.json()
-    args = body.get("message", {}).get("toolCalls", [{}])[0].get("function", {}).get("arguments", {})
+    print("WHATSAPP REQUEST:", json.dumps(body, indent=2))
+    
+    tool_call_id, args = extract_vapi_args(body)
     result = send_whatsapp(
         args.get("phone_number", ""),
         args.get("complaint_id", ""),
         args
     )
-    return {"results": [{"toolCallId": body.get("message", {}).get("toolCalls", [{}])[0].get("id", ""), "result": str(result)}]}
+    print("WHATSAPP RESULT:", result)
+    
+    return {
+        "results": [{
+            "toolCallId": tool_call_id,
+            "result": json.dumps(result)
+        }]
+    }
 
 @app.get("/health")
 async def health():
