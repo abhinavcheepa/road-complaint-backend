@@ -3,11 +3,11 @@ from firebase_config import db
 
 def detect_road_type(location: str) -> dict:
     try:
-        # Step 1: OpenStreetMap se coordinates lo
         osm_geo_url = f"https://nominatim.openstreetmap.org/search?q={location}&format=json&limit=1"
         geo_response = requests.get(
-            osm_geo_url, 
-            headers={"User-Agent": "road-complaint-app"}
+            osm_geo_url,
+            headers={"User-Agent": "road-complaint-app"},
+            timeout=5  # 👈 5 second timeout
         ).json()
 
         coordinates = None
@@ -17,10 +17,9 @@ def detect_road_type(location: str) -> dict:
                 "lng": geo_response[0]["lon"]
             }
 
-        # Step 2: Firebase database se check karo
+        # Firebase check
         roads_ref = db.collection("roads")
         docs = roads_ref.where("area", "==", location).stream()
-
         for doc in docs:
             road_data = doc.to_dict()
             return {
@@ -31,12 +30,13 @@ def detect_road_type(location: str) -> dict:
                 "source": "database"
             }
 
-        # Step 3: OpenStreetMap reverse geocoding
+        # OpenStreetMap reverse geocoding
         if coordinates:
             reverse_url = f"https://nominatim.openstreetmap.org/reverse?lat={coordinates['lat']}&lon={coordinates['lng']}&format=json"
             osm_response = requests.get(
                 reverse_url,
-                headers={"User-Agent": "road-complaint-app"}
+                headers={"User-Agent": "road-complaint-app"},
+                timeout=5  # 👈 5 second timeout
             ).json()
 
             road_ref = osm_response.get("address", {}).get("road", "")
@@ -61,9 +61,14 @@ def detect_road_type(location: str) -> dict:
         return {
             "success": True,
             "road_type": "Unknown",
-            "coordinates": coordinates,
+            "coordinates": None,
             "source": "not_found"
         }
 
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        print("Road type error:", e)
+        return {
+            "success": False,
+            "road_type": "Unknown",
+            "error": str(e)
+        }
