@@ -6,15 +6,40 @@ def save_complaint(data: dict):
     try:
         complaint_id = "CMP-" + str(uuid.uuid4())[:8].upper()
         
-        # Severity calculate karo
         severity = calculate_severity(data)
         
+        # Full address handle karo
+        full_address = data.get("full_address", {})
+        if isinstance(full_address, str):
+            full_address = {"street": full_address}
+        
+        # Location string banao
+        location_parts = [
+            full_address.get("street", ""),
+            full_address.get("ward_colony", ""),
+            full_address.get("city", ""),
+            full_address.get("district", ""),
+            full_address.get("state", ""),
+            full_address.get("pincode", "")
+        ]
+        location_string = ", ".join([p for p in location_parts if p])
+        if not location_string:
+            location_string = data.get("location", "")
+
         complaint = {
             "complaint_id": complaint_id,
             "session_id": data.get("session_id", str(uuid.uuid4())),
             "timestamp": datetime.utcnow().isoformat(),
             "complaint_type": data.get("complaint_type", ""),
-            "location": data.get("location", ""),
+            "location": location_string,
+            "full_address": {
+                "street": full_address.get("street", ""),
+                "ward_colony": full_address.get("ward_colony", ""),
+                "city": full_address.get("city", ""),
+                "district": full_address.get("district", ""),
+                "state": full_address.get("state", ""),
+                "pincode": full_address.get("pincode", "")
+            },
             "coordinates": data.get("coordinates", {"lat": "", "lng": ""}),
             "road_type": data.get("road_type", "Unknown"),
             "authority_assigned": data.get("authority_assigned", {}),
@@ -42,6 +67,7 @@ def save_complaint(data: dict):
         }
     
     except Exception as e:
+        print("Save complaint error:", e)
         return {"success": False, "error": str(e)}
 
 
@@ -54,7 +80,7 @@ def calculate_severity(data: dict) -> int:
     road_type = data.get("road_type", "")
     image = data.get("image_available", "no")
     
-    # Complaint type scoring
+    # Complaint type
     if complaint_type == "pothole":
         score += 3
     elif complaint_type == "waterlogging":
@@ -62,9 +88,9 @@ def calculate_severity(data: dict) -> int:
     else:
         score += 1
     
-    # Size scoring
+    # Size
     try:
-        size_num = float(''.join(filter(str.isdigit, str(size))))
+        size_num = float(''.join(filter(lambda x: x.isdigit() or x == '.', str(size))))
         if size_num > 3:
             score += 3
         elif size_num > 1:
@@ -74,9 +100,9 @@ def calculate_severity(data: dict) -> int:
     except:
         score += 1
     
-    # Depth scoring
+    # Depth
     try:
-        depth_num = float(''.join(filter(str.isdigit, str(depth))))
+        depth_num = float(''.join(filter(lambda x: x.isdigit() or x == '.', str(depth))))
         if depth_num > 1:
             score += 2
         else:
@@ -84,16 +110,16 @@ def calculate_severity(data: dict) -> int:
     except:
         score += 1
     
-    # Road type scoring
+    # Road type
     if road_type in ["NH", "SH"]:
         score += 2
     elif road_type == "MDR":
         score += 1
     
-    # Image scoring
-    if image == "no":
-        score += 1
-    else:
+    # Image
+    if image in ["yes", "already_uploaded"]:
         score -= 1
+    else:
+        score += 1
     
     return max(1, min(10, score))
