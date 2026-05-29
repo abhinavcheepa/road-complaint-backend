@@ -5,6 +5,7 @@ from tools.road_type_detection import detect_road_type
 from tools.authority_lookup import lookup_authority
 from tools.resume_session import resume_session, save_partial_session
 from tools.whatsapp_notification import send_whatsapp
+from firebase_config import db
 import uvicorn
 import json
 
