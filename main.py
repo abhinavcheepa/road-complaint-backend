@@ -43,11 +43,8 @@ def extract_vapi_args(body: dict):
 @app.post("/api/tools/save-to-firebase")
 async def save_to_firebase(request: Request):
     body = await request.json()
-    print("SAVE FIREBASE REQUEST:", json.dumps(body, indent=2))
     tool_call_id, args = extract_vapi_args(body)
-    print("PARSED ARGS:", args)
     result = save_complaint(args)
-    print("SAVE RESULT:", result)
     return {"results": [{"toolCallId": tool_call_id, "result": json.dumps(result)}]}
 
 @app.post("/api/tools/road-type-detection")
@@ -289,19 +286,14 @@ async def whatsapp_webhook(request: Request):
 
         data = body.get("data", {})
         messages = data.get("messages", {})
-
-        # WASender format
         key = messages.get("key", {})
 
-        # fromMe check — bot ke apne messages ignore karo
         if key.get("fromMe", False):
             return {"status": "ok"}
 
-        # Number nikalo
         from_number = key.get("cleanedSenderPn", "") or \
                       key.get("senderPn", "").replace("@s.whatsapp.net", "")
 
-        # Text nikalo
         message = messages.get("message", {})
         text = message.get("conversation", "") or \
                message.get("extendedTextMessage", {}).get("text", "") or \
@@ -325,10 +317,156 @@ async def whatsapp_webhook(request: Request):
         return {"status": "error", "message": str(e)}
 
 
+# ─── WhatsApp Session Management ──────────────────────────
+
+async def get_whatsapp_session(phone: str) -> dict:
+    try:
+        doc = db.collection("whatsapp_sessions").document(phone).get()
+        if doc.exists:
+            return doc.to_dict()
+        return {}
+    except:
+        return {}
+
+
+async def save_whatsapp_session(phone: str, step: str, data: dict):
+    try:
+        db.collection("whatsapp_sessions").document(phone).set({
+            "step": step,
+            "data": data,
+            "timestamp": datetime.utcnow().isoformat()
+        })
+    except Exception as e:
+        print("Session save error:", e)
+
+
+async def clear_whatsapp_session(phone: str):
+    try:
+        db.collection("whatsapp_sessions").document(phone).delete()
+    except Exception as e:
+        print("Session clear error:", e)
+
+
+# ─── WhatsApp Message Processing ──────────────────────────
+
 async def process_whatsapp_message(text: str, phone: str) -> str:
     t = text.lower().strip()
-    
-    # Greeting
+
+    # Session check karo
+    session = await get_whatsapp_session(phone)
+    current_step = session.get("step", "menu") if session else "menu"
+    session_data = session.get("data", {}) if session else {}
+
+    # ─── ACTIVE SESSION STEPS ─────────────────────────────
+
+    if current_step == "complaint_type":
+        types = {
+            "1": "pothole", "pothole": "pothole",
+            "2": "waterlogging", "waterlogging": "waterlogging",
+            "3": "drainage", "drainage": "drainage",
+            "4": "streetlight", "streetlight": "streetlight",
+            "5": "garbage", "garbage": "garbage",
+            "6": "other", "other": "other"
+        }
+        complaint_type = types.get(t)
+        if complaint_type:
+            session_data["complaint_type"] = complaint_type
+            await save_whatsapp_session(phone, "location", session_data)
+            return f"✅ *{complaint_type.upper()}* noted!\n\n📍 *Exact location batao* — mohalla, ward, city?"
+        else:
+            return """❓ Sahi option choose karein:
+
+1️⃣ Pothole
+2️⃣ Waterlogging
+3️⃣ Drainage
+4️⃣ Street Light
+5️⃣ Garbage
+6️⃣ Other"""
+
+    elif current_step == "location":
+        session_data["location"] = text
+        await save_whatsapp_session(phone, "details", session_data)
+        ct = session_data.get("complaint_type", "")
+        if ct == "pothole":
+            return "📏 *Pothole kitna bada hai?* (feet ya meters mein batao)"
+        elif ct == "waterlogging":
+            return "💧 *Kitne area mein paani bhara hai?*"
+        elif ct == "streetlight":
+            return "💡 *Kitni lights band hain aur kab se?*"
+        else:
+            return "📝 *Thoda detail mein batao — kitne time se ye problem hai?*"
+
+    elif current_step == "details":
+        session_data["pothole_size"] = text
+        await save_whatsapp_session(phone, "landmark", session_data)
+        return "🏛️ *Koi nearby landmark hai?* (school, mandir, petrol pump, ya koi dukan)\n\nAgar nahi pata to *skip* likhein"
+
+    elif current_step == "landmark":
+        if t != "skip":
+            session_data["landmark"] = text
+        await save_whatsapp_session(phone, "user_name", session_data)
+        return "👤 *Aapka naam batao*"
+
+    elif current_step == "user_name":
+        session_data["user_name"] = text
+        await save_whatsapp_session(phone, "confirm", session_data)
+
+        ct = session_data.get("complaint_type", "N/A")
+        loc = session_data.get("location", "N/A")
+        size = session_data.get("pothole_size", "N/A")
+        lm = session_data.get("landmark", "N/A")
+
+        return f"""📋 *Complaint Summary:*
+
+🔧 *Type:* {ct.upper()}
+📍 *Location:* {loc}
+📏 *Details:* {size}
+🏛️ *Landmark:* {lm}
+👤 *Name:* {text}
+📱 *Phone:* {phone}
+
+Kya ye sahi hai?
+Reply: *haan* ya *nahi*"""
+
+    elif current_step == "confirm":
+        if any(w in t for w in ["haan", "han", "yes", "sahi", "correct", "ok", "theek"]):
+            complaint_data = {
+                "complaint_type": session_data.get("complaint_type", ""),
+                "location": session_data.get("location", ""),
+                "pothole_size": session_data.get("pothole_size", ""),
+                "landmark": session_data.get("landmark", ""),
+                "user_name": session_data.get("user_name", ""),
+                "phone_number": phone,
+                "coordinates": {"lat": "", "lng": ""},
+                "road_type": "Unknown",
+                "language_detected": "hindi",
+                "whatsapp_consent": "yes",
+                "image_available": "no"
+            }
+            result = save_complaint(complaint_data)
+            complaint_id = result.get("complaint_id", "N/A")
+            severity = result.get("severity_score", 0)
+
+            await clear_whatsapp_session(phone)
+
+            return f"""✅ *Complaint Successfully Registered!*
+
+🆔 *Complaint ID:* {complaint_id}
+📍 *Location:* {session_data.get('location', 'N/A')}
+🔧 *Type:* {session_data.get('complaint_type', 'N/A').upper()}
+⚠️ *Severity:* {severity}/10
+
+Jald se jald action liya jaayega! 🙏
+_Road Complaint System_"""
+
+        elif any(w in t for w in ["nahi", "na", "no", "galat", "wrong", "cancel"]):
+            await clear_whatsapp_session(phone)
+            return "❌ Complaint cancel kar di. Dobara shuru karne ke liye *complaint* likhein."
+        else:
+            return "Reply karein: *haan* (register karein) ya *nahi* (cancel karein)"
+
+    # ─── MENU ─────────────────────────────────────────────
+
     if any(w in t for w in ["hello", "hi", "helo", "namaskar", "namaste", "hey", "start"]):
         return """🛣️ *Road Complaint System mein Aapka Swagat Hai!*
 
@@ -340,69 +478,39 @@ Main aapki kaise madad kar sakta hun?
 
 Reply mein number ya keyword bhejein! 😊"""
 
-    # Complaint
-    elif t in ["1"] or any(w in t for w in ["complaint", "report", "pothole", 
-        "shikayat", "complain", "darj", "krne", "karna", "kare", 
-        "karni", "chahta", "chahte", "register"]):
-        return """📝 *Nayi Complaint Register Karein*
+    elif t in ["1"] or any(w in t for w in ["complaint", "report", "pothole",
+        "shikayat", "complain", "darj", "register"]):
+        await save_whatsapp_session(phone, "complaint_type", {})
+        return """📝 *Complaint Register Karein*
 
-Complaint register karne ke 2 tarike hain:
+Kaunsi problem hai? Number bhejein:
 
-📞 *Voice Call:* Hamare AI agent se baat karein
-📱 *App:* Road Complaint System app use karein
+1️⃣ Pothole (Gaddha)
+2️⃣ Waterlogging (Paani bharana)
+3️⃣ Drainage problem
+4️⃣ Street Light band
+5️⃣ Garbage/Kachra
+6️⃣ Other"""
 
-Kya aap call se complaint register karna chahte hain?
-Reply karein: *call haan* ya *call nahi*"""
-
-    # Status
-    elif t in ["2"] or any(w in t for w in ["status", "check", "dekho", "dekhna"]):
-        return """🔍 *Complaint Status Check Karein*
+    elif t in ["2"] or any(w in t for w in ["status", "check"]):
+        return """🔍 *Status Check*
 
 Apna Complaint ID bhejein.
-Format: *CMP-XXXXXXXX*
+Format: *CMP-XXXXXXXX*"""
 
-Example: *CMP-1ACF21AE*"""
-
-    # Complaint ID
     elif t.startswith("cmp-"):
-        complaint_id = t.upper()
-        return await get_complaint_status(complaint_id)
+        return await get_complaint_status(t.upper())
 
-    # Call haan
-    elif "haan" in t and "call" in t or "han" in t and "call" in t:
-        return """📞 *Voice Agent Se Baat Karein*
+    elif t in ["3"] or any(w in t for w in ["help", "madad"]):
+        return """ℹ️ *Help*
 
-Abhi hamare AI voice agent ko call karein.
-Agent aapki complaint register karega! ✅
-
-_Hamare agent ka number jald available hoga!_"""
-
-    # Call nahi
-    elif "nahi" in t and "call" in t or "na" in t and "call" in t:
-        return """📱 *App Se Register Karein*
-
-1️⃣ App kholen
-2️⃣ "Complaint Register" click karein
-3️⃣ Photo click karein
-4️⃣ Submit karein 🚀"""
-
-    # Help
-    elif t in ["3"] or any(w in t for w in ["help", "madad", "info", "kaise"]):
-        return """ℹ️ *Road Complaint System — Help*
-
-*Commands:*
 - *complaint* — Nayi complaint
 - *status* — Status check
-- *CMP-XXXXXXXX* — Specific complaint status
-- *help* — Ye message
+- *CMP-XXXXXXXX* — Specific status
+- *help* — Ye message"""
 
-*Dashboard:* municipality-dashboard-omega.vercel.app"""
-
-    # Default
     else:
         return """🛣️ *Road Complaint System*
-
-Samajh nahi aaya. Please choose karein:
 
 1️⃣ *complaint* — Nayi complaint
 2️⃣ *status* — Status check
