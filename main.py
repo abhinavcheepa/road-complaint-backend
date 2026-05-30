@@ -327,7 +327,8 @@ async def whatsapp_webhook(request: Request):
 
 async def process_whatsapp_message(text: str, phone: str) -> str:
     t = text.lower().strip()
-
+    
+    # Greeting
     if any(w in t for w in ["hello", "hi", "helo", "namaskar", "namaste", "hey", "start"]):
         return """🛣️ *Road Complaint System mein Aapka Swagat Hai!*
 
@@ -339,7 +340,10 @@ Main aapki kaise madad kar sakta hun?
 
 Reply mein number ya keyword bhejein! 😊"""
 
-    elif any(w in t for w in ["1", "complaint", "report", "pothole", "shikayat", "complain", "darj"]):
+    # Complaint
+    elif t in ["1"] or any(w in t for w in ["complaint", "report", "pothole", 
+        "shikayat", "complain", "darj", "krne", "karna", "kare", 
+        "karni", "chahta", "chahte", "register"]):
         return """📝 *Nayi Complaint Register Karein*
 
 Complaint register karne ke 2 tarike hain:
@@ -350,7 +354,8 @@ Complaint register karne ke 2 tarike hain:
 Kya aap call se complaint register karna chahte hain?
 Reply karein: *call haan* ya *call nahi*"""
 
-    elif any(w in t for w in ["2", "status", "check", "dekho", "dekhna"]):
+    # Status
+    elif t in ["2"] or any(w in t for w in ["status", "check", "dekho", "dekhna"]):
         return """🔍 *Complaint Status Check Karein*
 
 Apna Complaint ID bhejein.
@@ -358,38 +363,32 @@ Format: *CMP-XXXXXXXX*
 
 Example: *CMP-1ACF21AE*"""
 
+    # Complaint ID
     elif t.startswith("cmp-"):
         complaint_id = t.upper()
         return await get_complaint_status(complaint_id)
 
-    elif any(w in t for w in ["call haan", "call han", "call yes", "haan call"]):
+    # Call haan
+    elif "haan" in t and "call" in t or "han" in t and "call" in t:
         return """📞 *Voice Agent Se Baat Karein*
 
 Abhi hamare AI voice agent ko call karein.
-Agent aapki complaint register karega aur confirmation WhatsApp pe bhejega! ✅
+Agent aapki complaint register karega! ✅
 
 _Hamare agent ka number jald available hoga!_"""
 
-    elif any(w in t for w in ["call nahi", "call na", "call no", "nahi call"]):
+    # Call nahi
+    elif "nahi" in t and "call" in t or "na" in t and "call" in t:
         return """📱 *App Se Register Karein*
-
-Road Complaint System app use karein:
 
 1️⃣ App kholen
 2️⃣ "Complaint Register" click karein
-3️⃣ Photo click karein — location auto save hogi
-4️⃣ Submit karein
+3️⃣ Photo click karein
+4️⃣ Submit karein 🚀"""
 
-_App download link jald available hoga!_ 🚀"""
-
-    elif any(w in t for w in ["3", "help", "madad", "info", "kaise"]):
+    # Help
+    elif t in ["3"] or any(w in t for w in ["help", "madad", "info", "kaise"]):
         return """ℹ️ *Road Complaint System — Help*
-
-*Hum kya karte hain:*
-🔧 Pothole, waterlogging, drainage complaints
-🚗 Driver safety warnings
-🏛️ Municipality ko direct notification
-📊 Budget transparency
 
 *Commands:*
 - *complaint* — Nayi complaint
@@ -399,14 +398,15 @@ _App download link jald available hoga!_ 🚀"""
 
 *Dashboard:* municipality-dashboard-omega.vercel.app"""
 
+    # Default
     else:
         return """🛣️ *Road Complaint System*
 
-Samajh nahi aaya. Please in options mein se choose karein:
+Samajh nahi aaya. Please choose karein:
 
-1️⃣ *complaint* — Nayi complaint register karein
-2️⃣ *status* — Complaint status check karein
-3️⃣ *help* — Help aur jankari"""
+1️⃣ *complaint* — Nayi complaint
+2️⃣ *status* — Status check
+3️⃣ *help* — Help"""
 
 
 async def get_complaint_status(complaint_id: str) -> str:
