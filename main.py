@@ -170,8 +170,7 @@ async def nearby_potholes(
             lng_str = str(coords.get("lng", ""))
             if lat_str == "" or lng_str == "":
                 continue
-            if d_lat == 0 or d_lng == 0:
-                continue
+            
             lat_diff = abs(float(lat) - d_lat)
             lng_diff = abs(float(lng) - d_lng)
             distance = ((lat_diff**2) + (lng_diff**2)) ** 0.5
