@@ -1,24 +1,21 @@
 import requests
 import os
-from requests.auth import HTTPBasicAuth
 
 def send_whatsapp(phone_number: str, complaint_id: str, data: dict) -> dict:
     try:
-        account_sid = os.getenv("TWILIO_ACCOUNT_SID")
-        auth_token = os.getenv("TWILIO_AUTH_TOKEN")
-        from_number = "whatsapp:+14155238886"
+        api_token = os.getenv("WASENDER_API_TOKEN")
+        session = os.getenv("WASENDER_SESSION", "road-complaint-bot")
 
         # Number format fix
         phone_number = str(phone_number).strip()
         phone_number = phone_number.replace(" ", "").replace("-", "")
         
-        if not phone_number.startswith("+"):
-            if phone_number.startswith("91"):
-                phone_number = "+" + phone_number
-            else:
-                phone_number = "+91" + phone_number
-        
-        to_number = f"whatsapp:{phone_number}"
+        if phone_number.startswith("+"):
+            phone_number = phone_number[1:]
+        elif phone_number.startswith("0"):
+            phone_number = "91" + phone_number[1:]
+        elif not phone_number.startswith("91"):
+            phone_number = "91" + phone_number
 
         # Authority name nikalo
         authority = data.get("authority_assigned", {})
@@ -40,27 +37,29 @@ Jald hi action liya jaayega. 🙏
 
 _Road Complaint System_"""
 
-        url = f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Messages.json"
+        url = f"https://api.wasenderapi.com/api/send-message"
 
-        response = requests.post(
-            url,
-            data={
-                "From": from_number,
-                "To": to_number,
-                "Body": message
-            },
-            auth=HTTPBasicAuth(account_sid, auth_token)
-        )
+        payload = {
+            "session": session,
+            "to": f"{phone_number}@s.whatsapp.net",
+            "text": message
+        }
 
+        headers = {
+            "Authorization": f"Bearer {api_token}",
+            "Content-Type": "application/json"
+        }
+
+        response = requests.post(url, json=payload, headers=headers)
         response_json = response.json()
-        print("TWILIO RESPONSE:", response_json)
+        print("WASENDER RESPONSE:", response_json)
 
-        if response.status_code == 201:
+        if response.status_code == 200:
             return {
                 "success": True,
                 "message_sent": True,
                 "complaint_id": complaint_id,
-                "message_sid": response_json.get("sid", "")
+                "response": response_json
             }
         else:
             return {
