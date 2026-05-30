@@ -288,11 +288,30 @@ async def whatsapp_webhook(request: Request):
             return {"status": "ok"}
 
         data = body.get("data", {})
-        message = data.get("message", {})
-        from_number = data.get("from", "").replace("@s.whatsapp.net", "")
-        text = message.get("text", {}).get("body", "").strip()
+        messages = data.get("messages", {})
+
+        # WASender format
+        key = messages.get("key", {})
+
+        # fromMe check — bot ke apne messages ignore karo
+        if key.get("fromMe", False):
+            return {"status": "ok"}
+
+        # Number nikalo
+        from_number = key.get("cleanedSenderPn", "") or \
+                      key.get("senderPn", "").replace("@s.whatsapp.net", "")
+
+        # Text nikalo
+        message = messages.get("message", {})
+        text = message.get("conversation", "") or \
+               message.get("extendedTextMessage", {}).get("text", "") or \
+               messages.get("messageBody", "")
+        text = text.strip()
 
         print(f"Message from {from_number}: {text}")
+
+        if not from_number or not text:
+            return {"status": "ok"}
 
         response_text = await process_whatsapp_message(text, from_number)
 
@@ -309,7 +328,7 @@ async def whatsapp_webhook(request: Request):
 async def process_whatsapp_message(text: str, phone: str) -> str:
     t = text.lower().strip()
 
-    if any(w in t for w in ["hello", "hi", "helo", "namaskar", "namaste", "hey", "haan", "start"]):
+    if any(w in t for w in ["hello", "hi", "helo", "namaskar", "namaste", "hey", "start"]):
         return """🛣️ *Road Complaint System mein Aapka Swagat Hai!*
 
 Main aapki kaise madad kar sakta hun?
@@ -363,7 +382,7 @@ Road Complaint System app use karein:
 
 _App download link jald available hoga!_ 🚀"""
 
-    elif any(w in t for w in ["3", "help", "madad", "info", "kya", "kaise"]):
+    elif any(w in t for w in ["3", "help", "madad", "info", "kaise"]):
         return """ℹ️ *Road Complaint System — Help*
 
 *Hum kya karte hain:*
@@ -406,8 +425,10 @@ async def get_complaint_status(complaint_id: str) -> str:
             authority_name = authority.get("org_name", "N/A") if isinstance(authority, dict) else "N/A"
 
             emoji = "⏳" if status == "pending" else "🔄" if status == "assigned" else "✅"
-            msg = "Aapki complaint process ho rahi hai. Jald action liya jaayega! 🙏" if status == "pending" \
-                else "Authority ne complaint assign kar li hai! 🔄" if status == "assigned" \
+            msg = "Aapki complaint process ho rahi hai. Jald action liya jaayega! 🙏" \
+                if status == "pending" \
+                else "Authority ne complaint assign kar li hai! 🔄" \
+                if status == "assigned" \
                 else "Complaint resolve ho gayi hai! ✅"
 
             return f"""🔍 *Complaint Status*
