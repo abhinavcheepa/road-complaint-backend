@@ -113,72 +113,47 @@ def calculate_safe_speed_logic(
         if severity >= 7: safe_speed = 20
         elif severity >= 4: safe_speed = 30
         else: safe_speed = 40
-    else:  # truck/auto
+    else:
         if severity >= 7: safe_speed = 10
         elif severity >= 4: safe_speed = 20
         else: safe_speed = 25
 
-    # Weight adjustment
     if vehicle_weight > 2000: safe_speed -= 10
     elif vehicle_weight > 1000: safe_speed -= 5
-
-    # Road type
     if road_type in ["NH", "SH"]: safe_speed += 10
     elif road_type == "Unknown": safe_speed -= 5
-
-    # Weather
     if weather == "rain": safe_speed -= 10
     elif weather == "fog": safe_speed -= 15
 
     return max(5, safe_speed)
 
 
-def get_detailed_warning(
-    data: dict,
-    distance_meters: float,
-    safe_speed: int,
-    current_speed: float,
-    vehicle_type: str
-) -> str:
+def get_detailed_warning(data, distance_meters, safe_speed, current_speed, vehicle_type):
     severity = data.get("severity_score", 0)
     size = data.get("pothole_size", "")
     depth = data.get("pothole_depth", "")
     complaint_type = data.get("complaint_type", "pothole")
-
     size_info = f"{size}" if size else ""
     depth_info = f", {depth} gehra" if depth else ""
 
     if current_speed > safe_speed:
-        return (
-            f"DANGER! {distance_meters:.0f} meter aage {complaint_type} hai "
-            f"({size_info}{depth_info}). "
-            f"Aapki speed {current_speed:.0f} km/h hai — "
-            f"TURANT {safe_speed} km/h kar lo!"
-        )
+        return (f"DANGER! {distance_meters:.0f} meter aage {complaint_type} hai "
+                f"({size_info}{depth_info}). Aapki speed {current_speed:.0f} km/h — "
+                f"TURANT {safe_speed} km/h kar lo!")
     elif severity >= 7:
-        return (
-            f"Savdhaan! {distance_meters:.0f} meter aage bada {complaint_type} hai "
-            f"({size_info}{depth_info}). "
-            f"Speed {safe_speed} km/h rakho."
-        )
+        return (f"Savdhaan! {distance_meters:.0f} meter aage bada {complaint_type} hai "
+                f"({size_info}{depth_info}). Speed {safe_speed} km/h rakho.")
     else:
-        return (
-            f"Dhyan rakhein — {distance_meters:.0f} meter aage {complaint_type} hai. "
-            f"{safe_speed} km/h safe speed hai."
-        )
-
+        return (f"Dhyan rakhein — {distance_meters:.0f} meter aage {complaint_type} hai. "
+                f"{safe_speed} km/h safe speed hai.")
 
 # ─── Driver Warning Endpoints ─────────────────────────────
 
 @app.get("/api/driver/nearby-potholes")
 async def nearby_potholes(
-    lat: float,
-    lng: float,
-    radius: float = 0.0005,
-    vehicle_type: str = "car",
-    current_speed: float = 0,
-    vehicle_weight: float = 1000,
-    weather: str = "clear"
+    lat: float, lng: float, radius: float = 0.0005,
+    vehicle_type: str = "car", current_speed: float = 0,
+    vehicle_weight: float = 1000, weather: str = "clear"
 ):
     try:
         docs = db.collection("driver_warnings").where("status", "==", "active").stream()
@@ -201,13 +176,10 @@ async def nearby_potholes(
             if distance <= radius:
                 severity = d.get("severity_score", 0)
                 road_type = d.get("road_type", "Unknown")
-
                 safe_speed = calculate_safe_speed_logic(
-                    vehicle_type, severity, road_type,
-                    vehicle_weight, weather
+                    vehicle_type, severity, road_type, vehicle_weight, weather
                 )
                 is_dangerous = current_speed > safe_speed
-
                 nearby.append({
                     "complaint_id": d.get("complaint_id"),
                     "complaint_type": d.get("complaint_type"),
@@ -221,12 +193,8 @@ async def nearby_potholes(
                     "safe_speed": safe_speed,
                     "current_speed": current_speed,
                     "is_dangerous": is_dangerous,
-                    "warning": get_detailed_warning(
-                        d, distance_meters, safe_speed,
-                        current_speed, vehicle_type
-                    )
+                    "warning": get_detailed_warning(d, distance_meters, safe_speed, current_speed, vehicle_type)
                 })
-
         nearby.sort(key=lambda x: x.get("severity_score", 0), reverse=True)
         return {"success": True, "count": len(nearby), "potholes": nearby}
     except Exception as e:
@@ -252,10 +220,7 @@ async def update_driver_location(request: Request):
             "is_active": True
         }
         db.collection("driver_sessions").document(session_id).set(location_data, merge=True)
-        return {"results": [{"toolCallId": tool_call_id, "result": json.dumps({
-            "success": True,
-            "session_id": session_id
-        })}]}
+        return {"results": [{"toolCallId": tool_call_id, "result": json.dumps({"success": True, "session_id": session_id})}]}
     except Exception as e:
         print("Update location error:", e)
         return {"results": [{"toolCallId": "", "result": str(e)}]}
@@ -274,25 +239,15 @@ async def calculate_safe_speed(request: Request):
         vehicle_weight = float(args.get("vehicle_weight", 1000))
 
         safe_speed = calculate_safe_speed_logic(
-            vehicle_type, severity, road_type,
-            vehicle_weight, weather
+            vehicle_type, severity, road_type, vehicle_weight, weather
         )
-
         is_dangerous = current_speed > safe_speed
-
-        if is_dangerous:
-            warning = (
-                f"DANGER! Aapki speed {current_speed:.0f} km/h hai — "
-                f"TURANT {safe_speed} km/h kar lo!"
-            )
-        else:
-            warning = f"Speed theek hai — {safe_speed} km/h maintain karein"
+        warning = (f"DANGER! Aapki speed {current_speed:.0f} km/h — TURANT {safe_speed} km/h kar lo!"
+                   if is_dangerous else f"Speed theek hai — {safe_speed} km/h maintain karein")
 
         return {"results": [{"toolCallId": tool_call_id, "result": json.dumps({
-            "success": True,
-            "safe_speed": safe_speed,
-            "current_speed": current_speed,
-            "is_dangerous": is_dangerous,
+            "success": True, "safe_speed": safe_speed,
+            "current_speed": current_speed, "is_dangerous": is_dangerous,
             "warning": warning,
             "message": f"{vehicle_type} ke liye {safe_speed} km/h safe speed hai"
         })}]}
@@ -324,15 +279,11 @@ async def get_weather(request: Request):
             temp = 25
 
         return {"results": [{"toolCallId": tool_call_id, "result": json.dumps({
-            "success": True,
-            "weather": weather_status,
-            "temperature": temp
+            "success": True, "weather": weather_status, "temperature": temp
         })}]}
     except Exception as e:
         print("Weather error:", e)
-        return {"results": [{"toolCallId": "", "result": json.dumps({
-            "success": True, "weather": "clear", "temperature": 25
-        })}]}
+        return {"results": [{"toolCallId": "", "result": json.dumps({"success": True, "weather": "clear", "temperature": 25})}]}
 
 
 @app.post("/api/driver/check-drowsiness")
@@ -356,10 +307,8 @@ async def check_drowsiness(request: Request):
                 message = "Driver thaka hua lag raha hai — alert karo"
 
         return {"results": [{"toolCallId": tool_call_id, "result": json.dumps({
-            "success": True,
-            "alert_level": alert_level,
-            "message": message,
-            "action_needed": alert_level > 0
+            "success": True, "alert_level": alert_level,
+            "message": message, "action_needed": alert_level > 0
         })}]}
     except Exception as e:
         print("Drowsiness error:", e)
@@ -389,11 +338,19 @@ async def whatsapp_webhook(request: Request):
                       key.get("senderPn", "").replace("@s.whatsapp.net", "")
 
         message = messages.get("message", {})
-        text = message.get("conversation", "") or \
-               message.get("extendedTextMessage", {}).get("text", "") or \
-               messages.get("messageBody", "")
-        text = text.strip()
 
+        # Location message check karo
+        location_msg = message.get("locationMessage", {})
+        if location_msg:
+            lat = location_msg.get("degreesLatitude", "")
+            lng = location_msg.get("degreesLongitude", "")
+            text = f"LOCATION:{lat},{lng}"
+        else:
+            text = message.get("conversation", "") or \
+                   message.get("extendedTextMessage", {}).get("text", "") or \
+                   messages.get("messageBody", "")
+
+        text = text.strip()
         print(f"Message from {from_number}: {text}")
 
         if not from_number or not text:
@@ -465,7 +422,7 @@ async def process_whatsapp_message(text: str, phone: str) -> str:
         if complaint_type:
             session_data["complaint_type"] = complaint_type
             await save_whatsapp_session(phone, "location", session_data)
-            return f"✅ *{complaint_type.upper()}* noted!\n\n📍 *Exact location batao* — mohalla, ward, city?"
+            return f"✅ *{complaint_type.upper()}* noted!\n\n📍 *Location batao:*\n\nText mein likho ya 📎 *Location share* karo — GPS coordinates automatically save honge!"
         else:
             return """❓ Sahi option choose karein:
 
@@ -477,22 +434,35 @@ async def process_whatsapp_message(text: str, phone: str) -> str:
 6️⃣ Other"""
 
     elif current_step == "location":
-        session_data["location"] = text
+        # GPS location handle karo
+        if text.startswith("LOCATION:"):
+            coords = text.replace("LOCATION:", "").split(",")
+            lat = coords[0] if len(coords) > 0 else ""
+            lng = coords[1] if len(coords) > 1 else ""
+            session_data["coordinates"] = {"lat": lat, "lng": lng}
+            session_data["location"] = f"GPS Location ({lat}, {lng})"
+            location_confirmed = f"📍 GPS Location saved! ({lat[:8]}..., {lng[:8]}...)"
+        else:
+            session_data["location"] = text
+            session_data["coordinates"] = {"lat": "", "lng": ""}
+            location_confirmed = f"📍 Location: {text}"
+
         await save_whatsapp_session(phone, "details", session_data)
         ct = session_data.get("complaint_type", "")
+
         if ct == "pothole":
-            return "📏 *Pothole kitna bada hai?* (feet ya meters mein batao)"
+            return f"{location_confirmed}\n\n📏 *Pothole kitna bada hai?* (feet ya meters mein batao)"
         elif ct == "waterlogging":
-            return "💧 *Kitne area mein paani bhara hai?*"
+            return f"{location_confirmed}\n\n💧 *Kitne area mein paani bhara hai?*"
         elif ct == "streetlight":
-            return "💡 *Kitni lights band hain aur kab se?*"
+            return f"{location_confirmed}\n\n💡 *Kitni lights band hain aur kab se?*"
         else:
-            return "📝 *Thoda detail mein batao — kitne time se ye problem hai?*"
+            return f"{location_confirmed}\n\n📝 *Thoda detail mein batao — kitne time se ye problem hai?*"
 
     elif current_step == "details":
         session_data["pothole_size"] = text
         await save_whatsapp_session(phone, "landmark", session_data)
-        return "🏛️ *Koi nearby landmark hai?*\n\nAgar nahi pata to *skip* likhein"
+        return "🏛️ *Koi nearby landmark hai?*\n(school, mandir, petrol pump)\n\nAgar nahi pata to *skip* likhein"
 
     elif current_step == "landmark":
         if t != "skip":
@@ -508,11 +478,14 @@ async def process_whatsapp_message(text: str, phone: str) -> str:
         loc = session_data.get("location", "N/A")
         size = session_data.get("pothole_size", "N/A")
         lm = session_data.get("landmark", "N/A")
+        coords = session_data.get("coordinates", {})
+        coords_text = f"✅ GPS saved" if coords.get("lat") else "❌ No GPS"
 
         return f"""📋 *Complaint Summary:*
 
 🔧 *Type:* {ct.upper()}
 📍 *Location:* {loc}
+🗺️ *Coordinates:* {coords_text}
 📏 *Details:* {size}
 🏛️ *Landmark:* {lm}
 👤 *Name:* {text}
@@ -530,7 +503,7 @@ Reply: *haan* ya *nahi*"""
                 "landmark": session_data.get("landmark", ""),
                 "user_name": session_data.get("user_name", ""),
                 "phone_number": phone,
-                "coordinates": {"lat": "", "lng": ""},
+                "coordinates": session_data.get("coordinates", {"lat": "", "lng": ""}),
                 "road_type": "Unknown",
                 "language_detected": "hindi",
                 "whatsapp_consent": "yes",
@@ -541,10 +514,14 @@ Reply: *haan* ya *nahi*"""
             severity = result.get("severity_score", 0)
             await clear_whatsapp_session(phone)
 
+            coords = session_data.get("coordinates", {})
+            coords_info = f"✅ GPS coordinates saved" if coords.get("lat") else "📍 Text location saved"
+
             return f"""✅ *Complaint Successfully Registered!*
 
 🆔 *Complaint ID:* {complaint_id}
 📍 *Location:* {session_data.get('location', 'N/A')}
+🗺️ *{coords_info}*
 🔧 *Type:* {session_data.get('complaint_type', 'N/A').upper()}
 ⚠️ *Severity:* {severity}/10
 
