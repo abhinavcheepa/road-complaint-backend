@@ -11,6 +11,7 @@ import uvicorn
 import json
 import uuid
 import os
+import requests
 
 app = FastAPI(title="Road Complaint Backend")
 
@@ -221,9 +222,8 @@ async def get_weather(request: Request):
         weather_key = os.getenv("OPENWEATHER_API_KEY", "")
 
         if weather_key:
-            import requests as req
             url = f"https://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lng}&appid={weather_key}&units=metric"
-            response = req.get(url, timeout=5)
+            response = requests.get(url, timeout=5)
             data = response.json()
             condition = data.get("weather", [{}])[0].get("main", "Clear").lower()
             temp = data.get("main", {}).get("temp", 25)
@@ -274,6 +274,187 @@ async def check_drowsiness(request: Request):
         print("Drowsiness error:", e)
         return {"results": [{"toolCallId": "", "result": str(e)}]}
 
+
+# ─── WhatsApp Bot Webhook ─────────────────────────────────
+
+@app.post("/api/whatsapp/webhook")
+async def whatsapp_webhook(request: Request):
+    try:
+        body = await request.json()
+        print("WHATSAPP WEBHOOK:", json.dumps(body, indent=2))
+
+        event = body.get("event", "")
+        if event != "messages.received":
+            return {"status": "ok"}
+
+        data = body.get("data", {})
+        message = data.get("message", {})
+        from_number = data.get("from", "").replace("@s.whatsapp.net", "")
+        text = message.get("text", {}).get("body", "").strip()
+
+        print(f"Message from {from_number}: {text}")
+
+        response_text = await process_whatsapp_message(text, from_number)
+
+        if response_text:
+            await send_wasender_message(from_number, response_text)
+
+        return {"status": "ok"}
+
+    except Exception as e:
+        print("Webhook error:", e)
+        return {"status": "error", "message": str(e)}
+
+
+async def process_whatsapp_message(text: str, phone: str) -> str:
+    t = text.lower().strip()
+
+    if any(w in t for w in ["hello", "hi", "helo", "namaskar", "namaste", "hey", "haan", "start"]):
+        return """🛣️ *Road Complaint System mein Aapka Swagat Hai!*
+
+Main aapki kaise madad kar sakta hun?
+
+1️⃣ *complaint* — Nayi complaint register karein
+2️⃣ *status* — Complaint status check karein
+3️⃣ *help* — Help aur jankari
+
+Reply mein number ya keyword bhejein! 😊"""
+
+    elif any(w in t for w in ["1", "complaint", "report", "pothole", "shikayat", "complain", "darj"]):
+        return """📝 *Nayi Complaint Register Karein*
+
+Complaint register karne ke 2 tarike hain:
+
+📞 *Voice Call:* Hamare AI agent se baat karein
+📱 *App:* Road Complaint System app use karein
+
+Kya aap call se complaint register karna chahte hain?
+Reply karein: *call haan* ya *call nahi*"""
+
+    elif any(w in t for w in ["2", "status", "check", "dekho", "dekhna"]):
+        return """🔍 *Complaint Status Check Karein*
+
+Apna Complaint ID bhejein.
+Format: *CMP-XXXXXXXX*
+
+Example: *CMP-1ACF21AE*"""
+
+    elif t.startswith("cmp-"):
+        complaint_id = t.upper()
+        return await get_complaint_status(complaint_id)
+
+    elif any(w in t for w in ["call haan", "call han", "call yes", "haan call"]):
+        return """📞 *Voice Agent Se Baat Karein*
+
+Abhi hamare AI voice agent ko call karein.
+Agent aapki complaint register karega aur confirmation WhatsApp pe bhejega! ✅
+
+_Hamare agent ka number jald available hoga!_"""
+
+    elif any(w in t for w in ["call nahi", "call na", "call no", "nahi call"]):
+        return """📱 *App Se Register Karein*
+
+Road Complaint System app use karein:
+
+1️⃣ App kholen
+2️⃣ "Complaint Register" click karein
+3️⃣ Photo click karein — location auto save hogi
+4️⃣ Submit karein
+
+_App download link jald available hoga!_ 🚀"""
+
+    elif any(w in t for w in ["3", "help", "madad", "info", "kya", "kaise"]):
+        return """ℹ️ *Road Complaint System — Help*
+
+*Hum kya karte hain:*
+🔧 Pothole, waterlogging, drainage complaints
+🚗 Driver safety warnings
+🏛️ Municipality ko direct notification
+📊 Budget transparency
+
+*Commands:*
+- *complaint* — Nayi complaint
+- *status* — Status check
+- *CMP-XXXXXXXX* — Specific complaint status
+- *help* — Ye message
+
+*Dashboard:* municipality-dashboard-omega.vercel.app"""
+
+    else:
+        return """🛣️ *Road Complaint System*
+
+Samajh nahi aaya. Please in options mein se choose karein:
+
+1️⃣ *complaint* — Nayi complaint register karein
+2️⃣ *status* — Complaint status check karein
+3️⃣ *help* — Help aur jankari"""
+
+
+async def get_complaint_status(complaint_id: str) -> str:
+    try:
+        docs = db.collection("complaints")\
+            .where("complaint_id", "==", complaint_id)\
+            .limit(1).stream()
+
+        for doc in docs:
+            data = doc.to_dict()
+            status = data.get("status", "pending")
+            location = data.get("location", "N/A")
+            complaint_type = data.get("complaint_type", "N/A")
+            severity = data.get("severity_score", 0)
+            authority = data.get("authority_assigned", {})
+            authority_name = authority.get("org_name", "N/A") if isinstance(authority, dict) else "N/A"
+
+            emoji = "⏳" if status == "pending" else "🔄" if status == "assigned" else "✅"
+            msg = "Aapki complaint process ho rahi hai. Jald action liya jaayega! 🙏" if status == "pending" \
+                else "Authority ne complaint assign kar li hai! 🔄" if status == "assigned" \
+                else "Complaint resolve ho gayi hai! ✅"
+
+            return f"""🔍 *Complaint Status*
+
+🆔 *ID:* {complaint_id}
+{emoji} *Status:* {status.upper()}
+📍 *Location:* {location}
+🔧 *Type:* {complaint_type}
+⚠️ *Severity:* {severity}/10
+🏛️ *Authority:* {authority_name}
+
+{msg}"""
+
+        return f"❌ *{complaint_id}* nahi mili.\n\nKripya sahi ID check karein."
+
+    except Exception as e:
+        return "❌ Status check mein error aaya. Baad mein try karein."
+
+
+async def send_wasender_message(phone: str, message: str):
+    try:
+        api_token = os.getenv("WASENDER_API_TOKEN")
+        session = os.getenv("WASENDER_SESSION", "road-complaint-bot")
+
+        phone = phone.replace("+", "").replace(" ", "").replace("-", "")
+        if not phone.startswith("91"):
+            phone = "91" + phone
+
+        url = "https://api.wasenderapi.com/api/send-message"
+        payload = {
+            "session": session,
+            "to": f"{phone}@s.whatsapp.net",
+            "text": message
+        }
+        headers = {
+            "Authorization": f"Bearer {api_token}",
+            "Content-Type": "application/json"
+        }
+
+        response = requests.post(url, json=payload, headers=headers)
+        print("BOT REPLY SENT:", response.status_code, response.json())
+
+    except Exception as e:
+        print("Send message error:", e)
+
+
+# ─── Health Check ─────────────────────────────────────────
 
 @app.get("/health")
 async def health():
