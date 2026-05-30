@@ -162,9 +162,13 @@ async def nearby_potholes(
             d = doc.to_dict()
             coords = d.get("coordinates", {})
             try:
-                d_lat = float(coords.get("lat", 0))
-                d_lng = float(coords.get("lng", 0))
+                d_lat = float(coords.get("lat", None) or 0)
+                d_lng = float(coords.get("lng", None) or 0)
             except:
+                continue
+            lat_str = str(coords.get("lat", ""))
+            lng_str = str(coords.get("lng", ""))
+            if lat_str == "" or lng_str == "":
                 continue
             if d_lat == 0 or d_lng == 0:
                 continue
