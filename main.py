@@ -96,10 +96,90 @@ async def image_analysis(request: Request):
     }
     return {"results": [{"toolCallId": tool_call_id, "result": json.dumps(result)}]}
 
+# ─── Driver Helper Functions ──────────────────────────────
+
+def calculate_safe_speed_logic(
+    vehicle_type: str,
+    severity: int,
+    road_type: str,
+    vehicle_weight: float = 1000,
+    weather: str = "clear"
+) -> int:
+    if vehicle_type == "bike":
+        if severity >= 7: safe_speed = 15
+        elif severity >= 4: safe_speed = 25
+        else: safe_speed = 30
+    elif vehicle_type == "car":
+        if severity >= 7: safe_speed = 20
+        elif severity >= 4: safe_speed = 30
+        else: safe_speed = 40
+    else:  # truck/auto
+        if severity >= 7: safe_speed = 10
+        elif severity >= 4: safe_speed = 20
+        else: safe_speed = 25
+
+    # Weight adjustment
+    if vehicle_weight > 2000: safe_speed -= 10
+    elif vehicle_weight > 1000: safe_speed -= 5
+
+    # Road type
+    if road_type in ["NH", "SH"]: safe_speed += 10
+    elif road_type == "Unknown": safe_speed -= 5
+
+    # Weather
+    if weather == "rain": safe_speed -= 10
+    elif weather == "fog": safe_speed -= 15
+
+    return max(5, safe_speed)
+
+
+def get_detailed_warning(
+    data: dict,
+    distance_meters: float,
+    safe_speed: int,
+    current_speed: float,
+    vehicle_type: str
+) -> str:
+    severity = data.get("severity_score", 0)
+    size = data.get("pothole_size", "")
+    depth = data.get("pothole_depth", "")
+    complaint_type = data.get("complaint_type", "pothole")
+
+    size_info = f"{size}" if size else ""
+    depth_info = f", {depth} gehra" if depth else ""
+
+    if current_speed > safe_speed:
+        return (
+            f"DANGER! {distance_meters:.0f} meter aage {complaint_type} hai "
+            f"({size_info}{depth_info}). "
+            f"Aapki speed {current_speed:.0f} km/h hai — "
+            f"TURANT {safe_speed} km/h kar lo!"
+        )
+    elif severity >= 7:
+        return (
+            f"Savdhaan! {distance_meters:.0f} meter aage bada {complaint_type} hai "
+            f"({size_info}{depth_info}). "
+            f"Speed {safe_speed} km/h rakho."
+        )
+    else:
+        return (
+            f"Dhyan rakhein — {distance_meters:.0f} meter aage {complaint_type} hai. "
+            f"{safe_speed} km/h safe speed hai."
+        )
+
+
 # ─── Driver Warning Endpoints ─────────────────────────────
 
 @app.get("/api/driver/nearby-potholes")
-async def nearby_potholes(lat: float, lng: float, radius: float = 0.0005):
+async def nearby_potholes(
+    lat: float,
+    lng: float,
+    radius: float = 0.0005,
+    vehicle_type: str = "car",
+    current_speed: float = 0,
+    vehicle_weight: float = 1000,
+    weather: str = "clear"
+):
     try:
         docs = db.collection("driver_warnings").where("status", "==", "active").stream()
         nearby = []
@@ -116,7 +196,18 @@ async def nearby_potholes(lat: float, lng: float, radius: float = 0.0005):
             lat_diff = abs(float(lat) - d_lat)
             lng_diff = abs(float(lng) - d_lng)
             distance = ((lat_diff**2) + (lng_diff**2)) ** 0.5
+            distance_meters = round(distance * 111000, 1)
+
             if distance <= radius:
+                severity = d.get("severity_score", 0)
+                road_type = d.get("road_type", "Unknown")
+
+                safe_speed = calculate_safe_speed_logic(
+                    vehicle_type, severity, road_type,
+                    vehicle_weight, weather
+                )
+                is_dangerous = current_speed > safe_speed
+
                 nearby.append({
                     "complaint_id": d.get("complaint_id"),
                     "complaint_type": d.get("complaint_type"),
@@ -124,28 +215,23 @@ async def nearby_potholes(lat: float, lng: float, radius: float = 0.0005):
                     "coordinates": coords,
                     "pothole_size": d.get("pothole_size"),
                     "pothole_depth": d.get("pothole_depth"),
-                    "severity_score": d.get("severity_score"),
-                    "road_type": d.get("road_type"),
-                    "distance_approx": round(distance * 111000, 1),
-                    "warning": get_warning_message(d)
+                    "severity_score": severity,
+                    "road_type": road_type,
+                    "distance_meters": distance_meters,
+                    "safe_speed": safe_speed,
+                    "current_speed": current_speed,
+                    "is_dangerous": is_dangerous,
+                    "warning": get_detailed_warning(
+                        d, distance_meters, safe_speed,
+                        current_speed, vehicle_type
+                    )
                 })
+
         nearby.sort(key=lambda x: x.get("severity_score", 0), reverse=True)
         return {"success": True, "count": len(nearby), "potholes": nearby}
     except Exception as e:
         print("Nearby potholes error:", e)
         return {"success": False, "error": str(e), "potholes": []}
-
-
-def get_warning_message(data: dict) -> str:
-    severity = data.get("severity_score", 0)
-    complaint_type = data.get("complaint_type", "")
-    size = data.get("pothole_size", "")
-    if severity >= 8:
-        return f"DANGER! Bada {complaint_type} aage hai — rukein ya dheerey chalein!"
-    elif severity >= 5:
-        return f"Savdhaan! {complaint_type} detected {size} — speed kam karein"
-    else:
-        return f"Chetavni: {complaint_type} nearby — dhyan rakhein"
 
 
 @app.post("/api/driver/update-location")
@@ -160,11 +246,16 @@ async def update_driver_location(request: Request):
             "lng": args.get("lng"),
             "speed": args.get("speed", 0),
             "vehicle_type": args.get("vehicle_type", "unknown"),
+            "vehicle_weight": args.get("vehicle_weight", 1000),
+            "vehicle_model": args.get("vehicle_model", ""),
             "timestamp": datetime.utcnow().isoformat(),
             "is_active": True
         }
         db.collection("driver_sessions").document(session_id).set(location_data, merge=True)
-        return {"results": [{"toolCallId": tool_call_id, "result": json.dumps({"success": True, "session_id": session_id})}]}
+        return {"results": [{"toolCallId": tool_call_id, "result": json.dumps({
+            "success": True,
+            "session_id": session_id
+        })}]}
     except Exception as e:
         print("Update location error:", e)
         return {"results": [{"toolCallId": "", "result": str(e)}]}
@@ -179,29 +270,30 @@ async def calculate_safe_speed(request: Request):
         severity = int(args.get("severity_score", 5))
         road_type = args.get("road_type", "City Road")
         weather = args.get("weather", "clear").lower()
+        current_speed = float(args.get("current_speed", 0))
+        vehicle_weight = float(args.get("vehicle_weight", 1000))
 
-        if vehicle_type == "bike":
-            if severity >= 7: safe_speed = 15
-            elif severity >= 4: safe_speed = 25
-            else: safe_speed = 30
-        elif vehicle_type == "car":
-            if severity >= 7: safe_speed = 20
-            elif severity >= 4: safe_speed = 30
-            else: safe_speed = 40
+        safe_speed = calculate_safe_speed_logic(
+            vehicle_type, severity, road_type,
+            vehicle_weight, weather
+        )
+
+        is_dangerous = current_speed > safe_speed
+
+        if is_dangerous:
+            warning = (
+                f"DANGER! Aapki speed {current_speed:.0f} km/h hai — "
+                f"TURANT {safe_speed} km/h kar lo!"
+            )
         else:
-            if severity >= 7: safe_speed = 10
-            elif severity >= 4: safe_speed = 20
-            else: safe_speed = 25
-
-        if road_type in ["NH", "SH"]: safe_speed += 10
-        elif road_type == "Unknown": safe_speed -= 5
-        if weather == "rain": safe_speed -= 10
-        elif weather == "fog": safe_speed -= 15
-        safe_speed = max(5, safe_speed)
+            warning = f"Speed theek hai — {safe_speed} km/h maintain karein"
 
         return {"results": [{"toolCallId": tool_call_id, "result": json.dumps({
             "success": True,
             "safe_speed": safe_speed,
+            "current_speed": current_speed,
+            "is_dangerous": is_dangerous,
+            "warning": warning,
             "message": f"{vehicle_type} ke liye {safe_speed} km/h safe speed hai"
         })}]}
     except Exception as e:
@@ -238,7 +330,9 @@ async def get_weather(request: Request):
         })}]}
     except Exception as e:
         print("Weather error:", e)
-        return {"results": [{"toolCallId": "", "result": json.dumps({"success": True, "weather": "clear", "temperature": 25})}]}
+        return {"results": [{"toolCallId": "", "result": json.dumps({
+            "success": True, "weather": "clear", "temperature": 25
+        })}]}
 
 
 @app.post("/api/driver/check-drowsiness")
@@ -352,7 +446,6 @@ async def clear_whatsapp_session(phone: str):
 async def process_whatsapp_message(text: str, phone: str) -> str:
     t = text.lower().strip()
 
-    # Session check karo
     session = await get_whatsapp_session(phone)
     current_step = session.get("step", "menu") if session else "menu"
     session_data = session.get("data", {}) if session else {}
@@ -399,7 +492,7 @@ async def process_whatsapp_message(text: str, phone: str) -> str:
     elif current_step == "details":
         session_data["pothole_size"] = text
         await save_whatsapp_session(phone, "landmark", session_data)
-        return "🏛️ *Koi nearby landmark hai?* (school, mandir, petrol pump, ya koi dukan)\n\nAgar nahi pata to *skip* likhein"
+        return "🏛️ *Koi nearby landmark hai?*\n\nAgar nahi pata to *skip* likhein"
 
     elif current_step == "landmark":
         if t != "skip":
@@ -446,7 +539,6 @@ Reply: *haan* ya *nahi*"""
             result = save_complaint(complaint_data)
             complaint_id = result.get("complaint_id", "N/A")
             severity = result.get("severity_score", 0)
-
             await clear_whatsapp_session(phone)
 
             return f"""✅ *Complaint Successfully Registered!*
